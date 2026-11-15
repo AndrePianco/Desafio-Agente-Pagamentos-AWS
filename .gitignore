@@ -16,6 +16,7 @@ npm-debug.log*
 # CDK
 cdk.out/
 cdk.context.json
+cdk-outputs.json
 .cdk.staging/
 
 # Python
