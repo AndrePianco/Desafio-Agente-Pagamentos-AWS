@@ -14,10 +14,11 @@ export class BackendStack extends cdk.Stack {
 
     const dados = new Dados(this, "Dados");
     const tools = new Tools(this, "Tools", { dados, ttlIntencaoSegundos: 300 });
-    const agente = new Agente(this, "Agente", {
-      modeloId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-      tools,
-    });
+    // Padrao: Claude Haiku 4.5 (recomendado pelo desafio). Pode ser trocado
+    // no deploy com `-c modelo=<inference profile>`, ex.: us.amazon.nova-lite-v1:0
+    const modeloId =
+      (this.node.tryGetContext("modelo") as string | undefined) ?? "us.anthropic.claude-haiku-4-5-20251001-v1:0";
+    const agente = new Agente(this, "Agente", { modeloId, tools });
 
     const saida = (nome: string, valor: string) => new cdk.CfnOutput(this, nome, { value: valor });
     saida("TabelaUsuarios", dados.usuarios.tableName);
