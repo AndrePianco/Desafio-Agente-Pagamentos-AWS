@@ -700,3 +700,49 @@ body {
   clip: rect(0,0,0,0);
   white-space: nowrap;
 }
+
+/* ════════════════════════════════════════════════════════════════
+   LOGIN (Amplify Authenticator) e ajustes da versão na AWS
+════════════════════════════════════════════════════════════════ */
+.auth-page {
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.auth-page [data-amplify-router] {
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.auth-logo {
+  justify-content: center;
+  margin: 0 0 20px;
+}
+
+[data-amplify-authenticator] {
+  --amplify-components-button-primary-background-color: var(--clr-primary);
+  --amplify-components-button-primary-hover-background-color: var(--clr-primary-h);
+  --amplify-components-button-link-color: var(--clr-primary);
+  --amplify-components-tabs-item-active-color: var(--clr-primary);
+  --amplify-components-tabs-item-active-border-color: var(--clr-primary);
+  --amplify-components-fieldcontrol-focus-border-color: var(--clr-primary);
+}
+
+.msg-erro {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--clr-error-bg);
+  border: 1px solid rgba(239,68,68,0.4);
+  color: #FCA5A5;
+  white-space: normal;
+}
+
+.msg-bubble .tool-calls-block + span { display: block; margin-top: 8px; }
+
+.btn-logout:disabled { opacity: 0.5; cursor: not-allowed; }
