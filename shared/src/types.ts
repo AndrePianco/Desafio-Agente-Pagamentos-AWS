@@ -49,7 +49,14 @@ export type ErroCompra =
   | "INTENCAO_JA_PAGA"
   | "INTENCAO_EXPIRADA"
   | "METODO_INVALIDO"
-  | "LIMITE_EXCEDIDO";
+  | "LIMITE_EXCEDIDO"
+  /**
+   * Novo na nuvem: o estoque e conferido de novo no pagamento, dentro da
+   * transacao do DynamoDB. Com varias instancias concorrentes, o estoque
+   * pode acabar entre registrar_intencao e realizar_compra -- na Fase 1
+   * (memoria, processo unico) ele simplesmente ficava negativo.
+   */
+  | "ESTOQUE_INSUFICIENTE";
 
 /** Erros do registrar_intencao (Fase 1). */
 export type ErroIntencao = "PRODUTO_INVALIDO" | "ESTOQUE_INSUFICIENTE";
