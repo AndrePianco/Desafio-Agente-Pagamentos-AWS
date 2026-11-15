@@ -1,43 +1,120 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
-import type { ChatMessage, ToolCall } from "@desafio/shared";
-import { enviarMensagem } from "./api.js";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  apagarHistorico,
+  carregarHistorico,
+  enviarMensagem,
+  ErroApi,
+  type EventoChat,
+  type MensagemConverse,
+} from "./api.js";
 
 interface Props {
   nome: string;
   aoSair: () => void;
 }
 
-export default function Chat({ nome, aoSair }: Props) {
-  const [mensagens,  setMensagens]  = useState<ChatMessage[]>([]);
-  const [input,      setInput]      = useState("");
-  const [aguardando, setAguardando] = useState(false);
-  const [erro,       setErro]       = useState<string | null>(null);
+interface ToolNaTela {
+  id: string;
+  nome: string;
+  argumentos: Record<string, unknown>;
+  resultado?: unknown;
+}
 
-  const listRef  = useRef<HTMLDivElement>(null);
+/** Um balao na tela. Um turno do assistente vira um unico balao. */
+interface Item {
+  role: "user" | "assistant";
+  texto: string;
+  tools: ToolNaTela[];
+  erro?: string;
+  /** Depois de uma tool, o proximo texto comeca em paragrafo novo. */
+  quebrar?: boolean;
+}
+
+export default function Chat({ nome, aoSair }: Props) {
+  const [itens, setItens] = useState<Item[]>([]);
+  const [input, setInput] = useState("");
+  const [aguardando, setAguardando] = useState(false);
+  const [carregando, setCarregando] = useState(true);
+  const [aviso, setAviso] = useState<string | null>(null);
+
+  const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Recarrega a conversa salva no DynamoDB ao abrir a tela.
+  useEffect(() => {
+    carregarHistorico()
+      .then((mensagens) => setItens(paraItens(mensagens)))
+      .catch((e) => tratarErro(e))
+      .finally(() => setCarregando(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [mensagens, aguardando]);
+  }, [itens, aguardando]);
+
+  function tratarErro(e: unknown) {
+    if (e instanceof ErroApi && e.status === 401) {
+      aoSair();
+      return;
+    }
+    setAviso(e instanceof Error ? e.message : "Erro ao comunicar com o servidor.");
+  }
+
+  /** Aplica um evento do stream no ultimo balao (o do assistente). */
+  function aplicar(ev: EventoChat) {
+    setItens((atual) => {
+      const copia = [...atual];
+      const ultimo = { ...copia[copia.length - 1]!, tools: [...copia[copia.length - 1]!.tools] };
+      if (ev.tipo === "texto") {
+        const delta = ultimo.texto ? ev.delta : ev.delta.trimStart();
+        if (ultimo.quebrar && ultimo.texto.trim() && delta.trim()) ultimo.texto = ultimo.texto.trimEnd() + "\n\n";
+        if (delta.trim()) ultimo.quebrar = false;
+        ultimo.texto += delta;
+      } else if (ev.tipo === "tool_chamada") {
+        ultimo.tools.push({ id: ev.id, nome: ev.nome, argumentos: ev.argumentos });
+        ultimo.quebrar = true;
+      }
+      else if (ev.tipo === "tool_resultado")
+        ultimo.tools = ultimo.tools.map((t) => (t.id === ev.id ? { ...t, resultado: ev.resultado } : t));
+      else if (ev.tipo === "erro") ultimo.erro = ev.mensagem;
+      copia[copia.length - 1] = ultimo;
+      return copia;
+    });
+  }
 
   async function enviar() {
     const texto = input.trim();
     if (!texto || aguardando) return;
 
-    setMensagens(prev => [...prev, { role: "user", content: texto }]);
+    setItens((atual) => [
+      ...atual,
+      { role: "user", texto, tools: [] },
+      { role: "assistant", texto: "", tools: [] },
+    ]);
     setInput("");
-    setErro(null);
+    setAviso(null);
     setAguardando(true);
 
     try {
-      const resp = await enviarMensagem(texto);
-      setMensagens(prev => [...prev, ...resp.mensagens]);
-    } catch (err: unknown) {
-      const e = err as { message?: string };
-      setErro(e.message ?? "Erro ao comunicar com o agente.");
+      await enviarMensagem(texto, aplicar);
+    } catch (e) {
+      aplicar({ tipo: "erro", mensagem: e instanceof Error ? e.message : "Falha ao enviar a mensagem." });
+      tratarErro(e);
     } finally {
       setAguardando(false);
       setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }
+
+  async function novaConversa() {
+    if (aguardando) return;
+    try {
+      await apagarHistorico();
+      setItens([]);
+      setAviso(null);
+    } catch (e) {
+      tratarErro(e);
     }
   }
 
@@ -48,44 +125,58 @@ export default function Chat({ nome, aoSair }: Props) {
     }
   }
 
-  const visiveis = mensagens.filter(m => m.role === "user" || m.role === "assistant");
+  const ultimo = itens[itens.length - 1];
+  const digitando = aguardando && ultimo?.role === "assistant" && !ultimo.texto.trim() && ultimo.tools.length === 0;
 
   return (
     <div className="chat-page">
       <header className="chat-header">
         <div className="chat-header-brand">
-          <div className="chat-header-icon" aria-hidden="true">🤖</div>
+          <div className="chat-header-icon" aria-hidden="true">🛍️</div>
           <div>
-            <div className="chat-header-title">Chatbot de Pagamentos MCP</div>
-            <div className="chat-header-sub">Agente de Pagamentos MCP</div>
+            <div className="chat-header-title">Assistente de Compras</div>
+            <div className="chat-header-sub">Agente na AWS · Bedrock AgentCore</div>
           </div>
         </div>
         <div className="chat-header-user">
           <span className="chat-header-name" aria-label={`Logado como ${nome}`}>{nome}</span>
-          <button id="btn-logout" className="btn-logout" onClick={aoSair} aria-label="Sair da conta">
+          <button className="btn-logout" onClick={novaConversa} disabled={aguardando} type="button">
+            Nova conversa
+          </button>
+          <button id="btn-logout" className="btn-logout" onClick={aoSair} aria-label="Sair da conta" type="button">
             Sair
           </button>
         </div>
       </header>
 
       <div ref={listRef} className="chat-messages" role="log" aria-label="Conversa" aria-live="polite">
-        {visiveis.length === 0 && !aguardando && (
+        {carregando && <div className="chat-empty"><p>Carregando conversa…</p></div>}
+
+        {!carregando && itens.length === 0 && (
           <div className="chat-empty">
-            <h2>Olá, {nome}!</h2>
+            <h2>Olá!</h2>
             <p>Pergunte o que temos à venda ou diga o que quer comprar.</p>
           </div>
         )}
 
-        {visiveis.map((msg, i) => (
-          <MensagemItem
-            key={i}
-            msg={msg}
-            toolResults={extrairResultados(mensagens, msg, i)}
-          />
-        ))}
+        {itens.map((item, i) =>
+          item.role === "assistant" && !item.texto.trim() && item.tools.length === 0 && !item.erro ? null : (
+            <div key={i} className={`msg-row ${item.role}`}>
+              <div className="msg-bubble">
+                {item.tools.length > 0 && (
+                  <div className="tool-calls-block" aria-label="Ferramentas chamadas">
+                    {item.tools.map((t) => <ToolChip key={t.id} tool={t} />)}
+                  </div>
+                )}
+                {item.texto && <span>{item.role === "assistant" ? formatar(item.texto) : item.texto}</span>}
+                {item.erro && <div className="msg-erro" role="alert">⚠️ {item.erro}</div>}
+              </div>
+            </div>
+          ),
+        )}
 
-        {aguardando && (
-          <div className="msg-row assistant" aria-label="Agente digitando…">
+        {digitando && (
+          <div className="msg-row assistant" aria-label="Assistente digitando…">
             <div className="typing-indicator" aria-hidden="true">
               <span className="typing-dot" />
               <span className="typing-dot" />
@@ -94,16 +185,14 @@ export default function Chat({ nome, aoSair }: Props) {
           </div>
         )}
 
-        {erro && (
+        {aviso && (
           <div className="msg-row assistant" role="alert">
-            <div className="msg-bubble" style={{ borderColor: "rgba(239,68,68,0.4)", color: "#FCA5A5" }}>
-              ⚠️ {erro}
-            </div>
+            <div className="msg-bubble"><div className="msg-erro">⚠️ {aviso}</div></div>
           </div>
         )}
       </div>
 
-      <form className="chat-input-area" onSubmit={e => { e.preventDefault(); enviar(); }} aria-label="Enviar mensagem">
+      <form className="chat-input-area" onSubmit={(e) => { e.preventDefault(); enviar(); }} aria-label="Enviar mensagem">
         <div className="chat-input-row">
           <textarea
             ref={inputRef}
@@ -111,20 +200,15 @@ export default function Chat({ nome, aoSair }: Props) {
             className="chat-input"
             placeholder="Digite uma mensagem… (Enter para enviar)"
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={aguardando}
+            disabled={aguardando || carregando}
+            maxLength={2000}
             rows={1}
             aria-label="Campo de mensagem"
             autoFocus
           />
-          <button
-            id="btn-enviar"
-            type="submit"
-            className="btn-send"
-            disabled={aguardando || !input.trim()}
-            aria-label="Enviar"
-          >
+          <button id="btn-enviar" type="submit" className="btn-send" disabled={aguardando || !input.trim()} aria-label="Enviar">
             ➤
           </button>
         </div>
@@ -134,75 +218,34 @@ export default function Chat({ nome, aoSair }: Props) {
   );
 }
 
-interface MensagemItemProps {
-  msg: ChatMessage;
-  toolResults: Record<string, unknown>;
-}
-
-function MensagemItem({ msg, toolResults }: MensagemItemProps) {
-  if (msg.role !== "user" && msg.role !== "assistant") return null;
-
-  return (
-    <div className={`msg-row ${msg.role}`}>
-      <div className="msg-bubble">
-        {msg.content && <span>{msg.content}</span>}
-        {msg.tool_calls && msg.tool_calls.length > 0 && (
-          <div className="tool-calls-block" aria-label="Ferramentas MCP chamadas">
-            {msg.tool_calls.map(tc => (
-              <ToolChip key={tc.id} tc={tc} resultado={toolResults[tc.id]} />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-interface ToolChipProps {
-  tc: ToolCall;
-  resultado?: unknown;
-}
-
-function ToolChip({ tc, resultado }: ToolChipProps) {
+function ToolChip({ tool }: { tool: ToolNaTela }) {
   const [expandido, setExpandido] = useState(false);
-
-  const statusAttr = deriveStatus(tc.nome, resultado);
-  const statusIcon = resultado === undefined
-    ? "⏳"
-    : statusAttr === "ok" ? "✅" : statusAttr === "err" ? "❌" : "✅";
+  const status = statusDaTool(tool);
+  const icone = tool.resultado === undefined ? "⏳" : status === "err" ? "❌" : "✅";
 
   return (
-    <div
-      className="tool-chip"
-      data-tool={tc.nome}
-      {...(statusAttr ? { "data-status": statusAttr } : {})}
-      role="region"
-      aria-label={`Ferramenta ${tc.nome}`}
-    >
+    <div className="tool-chip" data-tool={tool.nome} {...(status ? { "data-status": status } : {})}>
       <button
         className="tool-chip-header"
-        onClick={() => setExpandido(v => !v)}
+        onClick={() => setExpandido((v) => !v)}
         aria-expanded={expandido}
-        aria-controls={`chip-body-${tc.id}`}
+        aria-controls={`chip-${tool.id}`}
         type="button"
       >
         <span aria-hidden="true">🔧</span>
-        <span>{tc.nome}</span>
-        <span className="tool-chip-status" aria-label={`Status: ${statusIcon}`}>{statusIcon}</span>
-        <span aria-hidden="true" style={{ fontSize: "10px", marginLeft: 2 }}>
-          {expandido ? "▲" : "▼"}
-        </span>
+        <span>{tool.nome}</span>
+        <span className="tool-chip-status">{icone}</span>
+        <span aria-hidden="true" style={{ fontSize: "10px", marginLeft: 2 }}>{expandido ? "▲" : "▼"}</span>
       </button>
-
       {expandido && (
-        <div className="tool-chip-body" id={`chip-body-${tc.id}`}>
+        <div className="tool-chip-body" id={`chip-${tool.id}`}>
           <p className="tool-section-label">Argumentos</p>
-          <pre className="tool-json">{JSON.stringify(tc.argumentos, null, 2)}</pre>
-          {resultado !== undefined && (
+          <pre className="tool-json">{JSON.stringify(tool.argumentos, null, 2)}</pre>
+          {tool.resultado !== undefined && (
             <>
               <p className="tool-section-label">Resultado</p>
               <pre className="tool-json">
-                {typeof resultado === "string" ? resultado : JSON.stringify(resultado, null, 2)}
+                {typeof tool.resultado === "string" ? tool.resultado : JSON.stringify(tool.resultado, null, 2)}
               </pre>
             </>
           )}
@@ -212,42 +255,57 @@ function ToolChip({ tc, resultado }: ToolChipProps) {
   );
 }
 
-function extrairResultados(
-  todas: ChatMessage[],
-  msgAssistant: ChatMessage,
-  idxAssistant: number,
-): Record<string, unknown> {
-  if (!msgAssistant.tool_calls) return {};
-  const mapa: Record<string, unknown> = {};
-
-  for (const tc of msgAssistant.tool_calls) {
-    if (tc.resultado !== undefined) mapa[tc.id] = tc.resultado;
-  }
-
-  for (let i = idxAssistant + 1; i < todas.length; i++) {
-    const m = todas[i];
-    if (!m) break;
-    if (m.role === "assistant") break;
-    if (m.role === "tool" && m.tool_call_id) {
-      try {
-        mapa[m.tool_call_id] = JSON.parse(m.content);
-      } catch {
-        mapa[m.tool_call_id] = m.content;
-      }
-    }
-  }
-
-  return mapa;
+/** Verde para compra aprovada; vermelho para qualquer recusa ou erro. */
+function statusDaTool(tool: ToolNaTela): "ok" | "err" | undefined {
+  const r = tool.resultado as { status?: string; erro?: string } | undefined;
+  if (!r || typeof r !== "object") return undefined;
+  if (r.status === "recusado" || r.erro) return "err";
+  if (r.status === "aprovado") return "ok";
+  return undefined;
 }
 
-function deriveStatus(nomeTool: string, resultado: unknown): "ok" | "err" | undefined {
-  if (nomeTool !== "realizar_compra" || resultado === undefined) return undefined;
-  const r = resultado as { status?: string };
-  if (r?.status === "aprovado") return "ok";
-  if (r?.status === "recusado") return "err";
-  if (typeof resultado === "string") {
-    if (resultado.includes('"aprovado"')) return "ok";
-    if (resultado.includes('"recusado"')) return "err";
+/** Markdown minimo: **negrito**. Sem innerHTML, sem risco de injecao. */
+function formatar(texto: string): ReactNode[] {
+  return texto.split(/(\*\*[^*]+\*\*)/g).map((parte, i) =>
+    parte.startsWith("**") && parte.endsWith("**") ? <strong key={i}>{parte.slice(2, -2)}</strong> : parte,
+  );
+}
+
+/** Converte o historico salvo (formato Converse) nos baloes da tela. */
+function paraItens(mensagens: MensagemConverse[]): Item[] {
+  const itens: Item[] = [];
+  for (const m of mensagens) {
+    const textos = m.content.filter((b) => b.text).map((b) => b.text!);
+    if (m.role === "user") {
+      const resultados = m.content.filter((b) => b.toolResult);
+      if (resultados.length) {
+        const dono = itens[itens.length - 1];
+        for (const { toolResult } of resultados) {
+          const texto = toolResult!.content.map((c) => c.text ?? "").join("");
+          let resultado: unknown = texto;
+          try {
+            resultado = JSON.parse(texto);
+          } catch {
+            /* mantem texto */
+          }
+          const tool = dono?.tools.find((t) => t.id === toolResult!.toolUseId);
+          if (tool) tool.resultado = resultado;
+        }
+      }
+      if (textos.length) itens.push({ role: "user", texto: textos.join("\n"), tools: [] });
+      continue;
+    }
+    // assistant: junta com o balao anterior se ainda for o mesmo turno.
+    let alvo = itens[itens.length - 1];
+    if (!alvo || alvo.role !== "assistant") {
+      alvo = { role: "assistant", texto: "", tools: [] };
+      itens.push(alvo);
+    }
+    const texto = textos.join("\n").replace(/<thinking>[\s\S]*?<\/thinking>/g, "").trim();
+    if (texto) alvo.texto += (alvo.texto ? "\n\n" : "") + texto;
+    for (const b of m.content) {
+      if (b.toolUse) alvo.tools.push({ id: b.toolUse.toolUseId, nome: b.toolUse.name, argumentos: b.toolUse.input });
+    }
   }
-  return undefined;
+  return itens;
 }
