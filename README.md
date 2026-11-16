@@ -226,14 +226,15 @@ VITE_API_URL=<ApiUrl>
 o recomendado pelo desafio: baixo custo, boa latência e bom desempenho em tool calling.
 É o padrão em `infra/lib/backend-stack.ts`.
 
-> **Nota sobre o ambiente de avaliação.** Durante o desenvolvimento, a conta do estágio
-> retornou `Model use case details have not been submitted for this account` para o
-> Haiku 4.5, inclusive com o comando de teste do tech lead
-> (`get-foundation-model-availability` → `agreementAvailability: NOT_AVAILABLE`). Liberar
-> isso exige enviar o formulário de caso de uso da Anthropic, uma ação administrativa da
-> conta. Enquanto isso, o deploy usa **Amazon Nova Pro** (`-c modelo=us.amazon.nova-pro-v1:0`).
-> Nova Lite também foi testado, mas gerava tool calls malformadas e inventava categorias.
-> Quando o Haiku for liberado, basta refazer o deploy sem o `-c modelo`.
+**O deploy em produção usa o Claude Haiku 4.5.**
+
+> **Histórico.** No início do desenvolvimento, a conta do estágio retornava
+> `Model use case details have not been submitted for this account` para o Haiku 4.5
+> (`agreementAvailability: NOT_AVAILABLE`), porque faltava enviar o formulário de caso de
+> uso da Anthropic. Nesse período o agente foi validado com **Amazon Nova Pro**
+> (`-c modelo=us.amazon.nova-pro-v1:0`). O Nova Lite também foi testado, mas gerava tool
+> calls malformadas. Depois que o formulário foi enviado, o deploy voltou ao Haiku, o padrão
+> do código. O modelo continua configurável com `-c modelo=<inference profile>`.
 
 Ajustes no agente para tool calling confiável: `temperature=0`, limite de 6 turnos por
 mensagem (equivalente ao `MAX_ITERACOES=5` da Fase 1) e um filtro que remove blocos
@@ -364,7 +365,7 @@ API Gateway e CloudWatch Logs, em `us-east-1`) que nada restou.
 | Tema | Decisão | Motivo |
 |---|---|---|
 | Frontend | Roda local; Amplify Hosting pendente | Orientação do tech lead: CloudFront com problema de permissão na conta |
-| Modelo | Haiku 4.5 no código; Nova Pro no deploy atual | Acordo de uso da Anthropic pendente na conta (seção 3) |
+| Modelo | Claude Haiku 4.5 (configurável com `-c modelo`) | Recomendado pelo desafio; Nova Pro foi usado temporariamente enquanto o acordo da Anthropic estava pendente (seção 3) |
 | API | REST API com response streaming + autorizador Cognito | Atende "stream ou WebSocket" com 401 no próprio API Gateway |
 | Agente → tools | Agente invoca as Lambdas por `lambda:InvokeFunction` (desenho de referência) | Mais simples e com IAM direto; AgentCore Gateway (MCP) fica como extra |
 | Pacote do agente | *Direct code deployment* (zip arm64 no S3) gerado com `uv` | Dispensa Docker e ECR; deploys mais rápidos |
